@@ -4,12 +4,9 @@ from pathlib import Path
 
 import joblib
 import mlflow
-import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-)
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 from sklearn.ensemble import RandomForestClassifier
 
 def load_artifacts(artifacts_dir: Path):
@@ -58,9 +55,8 @@ def main():
     Xt_train = preproc.transform(X_train)
     Xt_test  = preproc.transform(X_test)
 
-    # Two simple candidates
     candidates = {
-        "logreg": LogisticRegression(max_iter=200, class_weight="balanced", n_jobs=None),
+        "logreg": LogisticRegression(max_iter=200, class_weight="balanced"),
         "rf": RandomForestClassifier(n_estimators=200, max_depth=None, random_state=42, n_jobs=-1),
     }
 
@@ -71,20 +67,16 @@ def main():
         with mlflow.start_run(run_name=f"{args.run_name}-{name}"):
             model.fit(Xt_train, y_train)
             metrics = evaluate_model(model, Xt_test, y_test)
-            # log params/metrics
             if hasattr(model, "get_params"):
                 mlflow.log_params({f"{name}_{k}": v for k, v in model.get_params().items()})
             mlflow.log_metrics({f"{name}_{k}": v for k, v in metrics.items()})
-
             if metrics.get("f1", -1) > best_metrics.get("f1", -1):
                 best_name, best_model, best_metrics = name, model, metrics
 
     # persist artifacts
     joblib.dump(best_model, model_out_dir / "model.joblib")
-    joblib.dump(meta,       model_out_dir / "meta.joblib")  # convenience copy
-    # (copy the preprocessor alongside model for inference)
-    preproc_out = model_out_dir / "preprocessor.joblib"
-    joblib.dump(joblib.load(artifacts_dir / "preprocess" / "preprocessor.joblib"), preproc_out)
+    joblib.dump(meta,       model_out_dir / "meta.joblib")
+    joblib.dump(preproc,    model_out_dir / "preprocessor.joblib")
 
     with open(model_out_dir / "metrics.json", "w") as f:
         json.dump({"model": best_name, **best_metrics}, f, indent=2)

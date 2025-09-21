@@ -1,25 +1,29 @@
-import streamlit as st
+import os
 import joblib
+import streamlit as st
 import pandas as pd
-from pathlib import Path
+from huggingface_hub import hf_hub_download
 
 st.set_page_config(page_title="Wellness Package Purchase Prediction", page_icon="🧘")
-
 st.title("🧘 Wellness Tourism — Purchase Prediction")
 
-# locate artifacts (as pushed by CI)
-MODEL_DIR = Path("artifacts") / "model"
-PREPROC_FILE = MODEL_DIR / "preprocessor.joblib"
-MODEL_FILE = MODEL_DIR / "model.joblib"
-META_FILE = MODEL_DIR / "meta.joblib"
+MODEL_REPO = os.getenv("HF_MODEL_REPO", "labhara/tourism-wellness-model")  # set via Space Variables if needed
+TOKEN = os.getenv("HF_TOKEN")  # set via Space Secrets if the model repo is private
 
-if not (PREPROC_FILE.exists() and MODEL_FILE.exists() and META_FILE.exists()):
-    st.warning("Artifacts not found. Please run the CI pipeline to generate and push them.")
-    st.stop()
+REQUIRED = ["preprocessor.joblib", "model.joblib", "meta.joblib"]
+local_files = {}
+for fname in REQUIRED:
+    local_files[fname] = hf_hub_download(
+        repo_id=MODEL_REPO,
+        filename=fname,
+        repo_type="model",
+        token=TOKEN,
+    )
 
-preproc = joblib.load(PREPROC_FILE)
-model = joblib.load(MODEL_FILE)
-meta = joblib.load(META_FILE)
+preproc = joblib.load(local_files["preprocessor.joblib"])
+model = joblib.load(local_files["model.joblib"])
+meta = joblib.load(local_files["meta.joblib"])
+
 num_cols = meta.get("numeric_cols", [])
 cat_cols = meta.get("categorical_cols", [])
 all_cols = num_cols + cat_cols
@@ -27,7 +31,6 @@ all_cols = num_cols + cat_cols
 st.subheader("Enter customer features")
 with st.form("predict_form"):
     inputs = {}
-    # simple typed inputs; you can tailor these to your schema and add selectboxes for categoricals
     for c in num_cols:
         inputs[c] = st.number_input(c, value=0.0, step=1.0, format="%.4f")
     for c in cat_cols:

@@ -39,7 +39,7 @@ def make_preprocessor(numeric_cols, categorical_cols):
 
 def main():
     parser = argparse.ArgumentParser(description="Download dataset from HF, clean/split, save artifacts (CI-safe).")
-    parser.add_argument("--dataset-repo", required=True, help="e.g. <hf-user>/tourism-wellness-dataset")
+    parser.add_argument("--dataset-repo", required=True, help="e.g. labhara/tourism-wellness-dataset")
     parser.add_argument("--dataset-path-in-repo", default="data/tourism.csv", help="Path to CSV inside HF dataset repo")
     parser.add_argument("--artifacts-dir", default="artifacts", help="Where to write split data & preprocessors")
     parser.add_argument("--hf-token", required=True, help="Hugging Face access token")

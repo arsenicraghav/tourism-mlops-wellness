@@ -4,7 +4,7 @@ from huggingface_hub import HfApi, create_repo
 
 def main():
     parser = argparse.ArgumentParser(description="Upload local CSV to a Hugging Face dataset repo (CI-safe).")
-    parser.add_argument("--dataset-repo", required=True, help="e.g. <hf-username>/tourism-wellness-dataset")
+    parser.add_argument("--dataset-repo", required=True, help="e.g. labhara/tourism-wellness-dataset")
     parser.add_argument("--local-path", default="tourism_project/data/tourism.csv", help="Local CSV path")
     parser.add_argument("--path-in-repo", default="data/tourism.csv", help="Destination path inside the HF dataset repo")
     parser.add_argument("--private", action="store_true", help="Create the dataset repo as private (if it doesn't exist)")
