@@ -1,0 +1,11 @@
+
+__pycache__/
+*.pyc
+.env
+.mlflow/
+artifacts/
+*.pickle
+*.pkl
+dist/
+build/
+.ipynb_checkpoints/
