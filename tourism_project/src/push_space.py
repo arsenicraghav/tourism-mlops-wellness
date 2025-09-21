@@ -1,81 +1,97 @@
 import argparse
-from huggingface_hub import HfApi, create_repo, SpaceSdk
+from pathlib import Path
+from huggingface_hub import HfApi, create_repo
 from huggingface_hub.utils._errors import HfHubHTTPError
 
-def resolve_sdk(s: str) -> SpaceSdk:
-    s = (s or "").strip().lower()
-    mapping = {
-        "streamlit": SpaceSdk.STREAMLIT,
-        "gradio": SpaceSdk.GRADIO,
-        "static": SpaceSdk.STATIC,
-        "docker": SpaceSdk.DOCKER,
-    }
-    if s not in mapping:
-        raise SystemExit(f"Invalid --sdk '{s}'. Choose from: streamlit, gradio, static, docker.")
-    return mapping[s]
+README_HEADER_TMPL = """---
+title: Wellness Tourism App
+sdk: {sdk}
+app_file: app.py
+---
+"""
 
-def repo_type_of(api: HfApi, repo_id: str):
+def ensure_space_readme(folder: Path, sdk: str) -> None:
+    """Ensure README.md exists with a YAML front matter declaring the Space SDK."""
+    folder.mkdir(parents=True, exist_ok=True)
+    readme = folder / "README.md"
+    header = README_HEADER_TMPL.format(sdk=sdk.strip().lower())
+    if not readme.exists():
+        readme.write_text(header, encoding="utf-8")
+        return
+    # If README exists but no front matter, prepend one.
+    content = readme.read_text(encoding="utf-8")
+    if not content.lstrip().startswith("---"):
+        readme.write_text(header + "\n" + content, encoding="utf-8")
+        return
+    # If front matter exists, leave it as-is (assume it already declares sdk/app_file)
+
+def repo_exists_as_space(api: HfApi, repo_id: str) -> bool:
     try:
-        api.space_info(repo_id); return "space"
+        api.repo_info(repo_id, repo_type="space")
+        return True
     except Exception:
-        pass
-    try:
-        api.dataset_info(repo_id); return "dataset"
-    except Exception:
-        pass
-    try:
-        api.model_info(repo_id); return "model"
-    except Exception:
-        pass
+        return False
+
+def exists_as_other_type(api: HfApi, repo_id: str) -> str | None:
+    for t in ("dataset", "model"):
+        try:
+            api.repo_info(repo_id, repo_type=t)
+            return t
+        except Exception:
+            pass
     return None
 
 def main():
-    p = argparse.ArgumentParser(description="Push a folder to a Hugging Face Space (CI-safe).")
-    p.add_argument("--space-id", required=True, help="e.g. labhara/tourism-wellness-app")
+    p = argparse.ArgumentParser(description="Push a folder to a Hugging Face Space (backward-compatible).")
+    p.add_argument("--space-id", required=True, help="e.g. <user or org>/tourism-wellness-app")
     p.add_argument("--folder", required=True, help="Local folder to upload as the Space root")
-    p.add_argument("--hf-token", required=True, help="Hugging Face access token (with write permission)")
+    p.add_argument("--hf-token", required=True, help="Hugging Face access token with write permission")
     p.add_argument("--private", action="store_true", help="Create the Space as private if it doesn't exist")
     p.add_argument("--sdk", default="streamlit", help="Space SDK: streamlit | gradio | static | docker")
     args = p.parse_args()
 
     api = HfApi(token=args.hf_token)
-    sdk_enum = resolve_sdk(args.sdk)
+    folder = Path(args.folder)
+    sdk = args.sdk.strip().lower()
 
-    existing_type = repo_type_of(api, args.space_id)
+    # 0) Ensure README header so the hub knows the SDK even if we can't pass space_sdk
+    ensure_space_readme(folder, sdk)
 
-    if existing_type is None:
+    # 1) Create the Space if needed (avoid SpaceSdk to keep compatibility)
+    if not repo_exists_as_space(api, args.space_id):
+        other = exists_as_other_type(api, args.space_id)
+        if other:
+            raise SystemExit(
+                f"❌ '{args.space_id}' already exists as a {other}. "
+                f"Choose a different --space-id or delete/rename the existing repo."
+            )
         try:
+            # Older hub versions may not support space_sdk kwarg; call without it.
             create_repo(
                 repo_id=args.space_id,
                 token=args.hf_token,
                 repo_type="space",
                 private=args.private,
                 exist_ok=False,
-                space_sdk=sdk_enum,
             )
-            print(f"✅ Created Space '{args.space_id}' (sdk={sdk_enum.value}, private={args.private})")
+            print(f"✅ Created Space '{args.space_id}' (private={args.private})")
         except HfHubHTTPError as e:
-            raise SystemExit(
-                f"Failed to create Space '{args.space_id}'. "
-                f"Check --sdk value and token permissions. Original error: {e}"
-            )
-    elif existing_type != "space":
-        raise SystemExit(
-            f"❌ Repo '{args.space_id}' already exists as a {existing_type}. "
-            f"Choose a different --space-id (or delete/rename the existing repo)."
-        )
-    else:
-        print(f"ℹ️ Space '{args.space_id}' already exists. Skipping creation.")
+            # If a 409 happens due to a race, continue; else surface error.
+            if e.response is not None and e.response.status_code == 409:
+                print(f"ℹ️ Space '{args.space_id}' already exists (race). Continuing…")
+            else:
+                raise
 
+    # 2) Upload folder contents to the Space root
     try:
         api.upload_folder(
-            folder_path=args.folder,
+            folder_path=str(folder),
             repo_id=args.space_id,
             repo_type="space",
             path_in_repo="/",
-            commit_message=f"Update space from CI: upload {args.folder}",
+            commit_message=f"Update space from CI: upload {folder}",
         )
-        print(f"✅ Uploaded folder '{args.folder}' to Space '{args.space_id}'")
+        print(f"✅ Uploaded folder '{folder}' to Space '{args.space_id}'")
     except HfHubHTTPError as e:
         raise SystemExit(
             f"Upload failed. Ensure the folder exists and token has write access. Original error: {e}"
