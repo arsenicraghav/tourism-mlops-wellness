@@ -19,6 +19,13 @@ def main():
         exist_ok=True,
         space_sdk=args.sdk,
     )
+    create_repo(
+        repo_id="labhara/tourism-wellness-app",
+        token=hf_token,
+        repo_type="space",
+        space_sdk="streamlit",
+        exist_ok=True
+    )
 
     api = HfApi(token=args.hf_token)
     # Upload folder to Space root
