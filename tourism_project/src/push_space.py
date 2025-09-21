@@ -13,7 +13,7 @@ def main():
     # Ensure Space exists (or create it)
     create_repo(
         repo_id="labhara/tourism-wellness-app",
-        token=hf_token,
+        token=args.hf_token,
         repo_type="space",
         space_sdk="streamlit",
         exist_ok=True
