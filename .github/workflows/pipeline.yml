@@ -1,0 +1,218 @@
+name: Tourism Project Pipeline
+
+on:
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: tourism-pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HF_DATASET_REPO: "labhara/tourism-wellness-dataset"  # dataset repo for tourism.csv
+  HF_MODEL_REPO:   "labhara/tourism-wellness-model"    # model repo for trained artifacts
+  HF_SPACE_ID:     "labhara/tourism-wellness-app"      # Streamlit Space (UI only)
+
+jobs:
+
+  register-dataset:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mask HF token
+        run: echo "::add-mask::${{ secrets.HF_TOKEN }}"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Upload dataset to HF (dataset repo)
+        run: |
+          python tourism_project/src/register_dataset.py \
+            --dataset-repo "${{ env.HF_DATASET_REPO }}" \
+            --local-path "tourism_project/data/tourism.csv" \
+            --path-in-repo "data/tourism.csv" \
+            --private \
+            --hf-token "${{ secrets.HF_TOKEN }}"
+
+  data-prep:
+    needs: register-dataset
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mask HF token
+        run: echo "::add-mask::${{ secrets.HF_TOKEN }}"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run data preparation (clean/split + upload splits back to HF)
+        run: |
+          python tourism_project/src/data_prep.py \
+            --dataset-repo "${{ env.HF_DATASET_REPO }}" \
+            --dataset-path-in-repo "data/tourism.csv" \
+            --artifacts-dir "artifacts" \
+            --hf-token "${{ secrets.HF_TOKEN }}" \
+            --drop-cols "CustomerID"
+
+      - name: Show produced splits
+        run: ls -lah artifacts/splits || true
+
+  model-training:
+    needs: data-prep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mask HF token
+        run: echo "::add-mask::${{ secrets.HF_TOKEN }}"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Train using splits directly from the HF dataset repo (tuning + MLflow logging)
+      - name: Train model (tuned, MLflow local tracking)
+        run: |
+          python tourism_project/src/train.py \
+            --dataset-repo "${{ env.HF_DATASET_REPO }}" \
+            --train-path-in-repo "splits/train.csv" \
+            --test-path-in-repo  "splits/test.csv" \
+            --hf-token "${{ secrets.HF_TOKEN }}" \
+            --mlflow-uri "file:./mlruns" \
+            --artifacts-dir "artifacts/model" \
+            --cv 5 --n-iter 20
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-artifacts
+          path: artifacts/model
+          retention-days: 7
+
+  publish-model:
+    needs: model-training
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: model-artifacts
+          path: artifacts_bundle
+
+      - name: Inspect downloaded artifacts
+        run: |
+          echo "Tree under artifacts_bundle:"
+          find artifacts_bundle -maxdepth 6 -type f -print || true
+
+      - name: Locate model artifact directory
+        id: locate
+        run: |
+          set -e
+          MODEL_FILE="$(find artifacts_bundle -maxdepth 8 -type f -name 'model.joblib' | head -n1 || true)"
+          if [ -z "$MODEL_FILE" ]; then
+            echo "❌ model.joblib not found under artifacts_bundle"
+            exit 1
+          fi
+          ART_DIR="$(dirname "$MODEL_FILE")"
+          echo "Found artifacts in: $ART_DIR"
+          echo "ART_DIR=$ART_DIR" >> "$GITHUB_ENV"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install hub client
+        run: |
+          python -m pip install --upgrade pip
+          pip install "huggingface_hub>=0.25"
+
+      - name: Publish artifacts to HF model repo
+        run: |
+          python tourism_project/src/publish_model.py \
+            --model-repo "${{ env.HF_MODEL_REPO }}" \
+            --artifacts-dir "${{ env.ART_DIR }}" \
+            --hf-token "${{ secrets.HF_TOKEN }}" \
+            --private
+
+  deploy-hosting:
+    needs: [publish-model]   # thin Space only depends on published model
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mask HF token
+        run: echo "::add-mask::${{ secrets.HF_TOKEN }}"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install up-to-date hub client
+        run: |
+          python -m pip install --upgrade pip
+          pip install "huggingface_hub>=0.25"
+
+      # Build a thin Space bundle: code only. App downloads model from HF_MODEL_REPO at runtime.
+      - name: Prepare Space bundle (code only)
+        run: |
+          rm -rf space-bundle
+          mkdir -p space-bundle
+          cp app.py space-bundle/
+          cp requirements.txt space-bundle/
+          # Optional: ship Dockerfile (not used by sdk=streamlit but OK to include)
+          cp tourism_project/deployment/Dockerfile space-bundle/ || true
+          printf "This Space loads artifacts from '%s' at runtime.\n" "${{ env.HF_MODEL_REPO }}" > space-bundle/README.md
+
+      - name: Push to Hugging Face Space
+        run: |
+          python tourism_project/src/push_space.py \
+            --space-id "${{ env.HF_SPACE_ID }}" \
+            --folder "space-bundle" \
+            --hf-token "${{ secrets.HF_TOKEN }}" \
+            --sdk streamlit
